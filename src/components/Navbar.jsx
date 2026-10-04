@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Sparkles, Menu, X, ArrowUpRight, Lock, Layers, User, Send, Sun, Moon } from 'lucide-react';
+import { Sparkles, Menu, X, ArrowUpRight, Lock, Layers, User, Send, Sun, Moon, Box } from 'lucide-react';
 import { useTheme } from '../context/ThemeContext';
 
 export default function Navbar({ onOpenAdmin, activeSection }) {
@@ -17,6 +17,7 @@ export default function Navbar({ onOpenAdmin, activeSection }) {
 
   const navLinks = [
     { name: 'Works', href: '#works', icon: Layers },
+    { name: 'CEED Lab', href: '#ceed-lab', icon: Box, badge: 'AI' },
     { name: 'About Craft', href: '#about', icon: User },
     { name: 'Contact', href: '#contact', icon: Send },
   ];
@@ -61,6 +62,11 @@ export default function Navbar({ onOpenAdmin, activeSection }) {
               >
                 <Icon className="w-3.5 h-3.5 text-amber-500" />
                 <span>{link.name}</span>
+                {link.badge && (
+                  <span className="text-[9px] font-mono px-1.5 py-0.2 rounded-full bg-amber-500/15 text-amber-500 font-bold border border-amber-500/30">
+                    {link.badge}
+                  </span>
+                )}
               </a>
             );
           })}
@@ -153,6 +159,11 @@ export default function Navbar({ onOpenAdmin, activeSection }) {
               >
                 <Icon className="w-4 h-4 text-amber-500" />
                 <span>{link.name}</span>
+                {link.badge && (
+                  <span className="text-[9px] font-mono px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-500 font-bold border border-amber-500/30 ml-auto">
+                    {link.badge}
+                  </span>
+                )}
               </a>
             );
           })}

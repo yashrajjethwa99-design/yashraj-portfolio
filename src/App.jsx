@@ -8,6 +8,7 @@ import ProjectModal from './components/ProjectModal';
 import AdminDashboard from './components/AdminDashboard';
 import SpotlightCursor from './components/SpotlightCursor';
 import MarqueeBanner from './components/MarqueeBanner';
+import CeedLabSection from './components/CeedLab/CeedLabSection';
 import { getPortfolioData } from './utils/storage';
 
 export default function App() {
@@ -48,7 +49,10 @@ export default function App() {
           onSelectProject={(proj) => setSelectedProject(proj)} 
         />
 
-        {/* 3. Art-Directed About Section */}
+        {/* 3. CEED Spatial & AI Design Innovation Lab */}
+        <CeedLabSection />
+
+        {/* 4. Art-Directed About Section */}
         <AboutSection 
           profile={data.profile} 
         />
