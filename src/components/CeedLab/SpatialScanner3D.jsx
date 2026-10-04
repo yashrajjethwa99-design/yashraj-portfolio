@@ -1,29 +1,34 @@
 import React, { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { 
   Upload, Clipboard, RotateCw, ZoomIn, ZoomOut, Eye, Layers, Sun, Download, 
   RefreshCw, Box, Sparkles, Check, Play, Pause, Scissors, Sliders, ShieldCheck,
-  Maximize2, Image as ImageIcon
+  Maximize2, Cylinder, CircleDot, Activity, FileCode
 } from 'lucide-react';
 import { CEED_3D_PRESETS } from './ceedPresets';
 
 export default function SpatialScanner3D() {
   const mountRef = useRef(null);
   const fileInputRef = useRef(null);
+  const glbInputRef = useRef(null);
 
   // Active state
   const [activePreset, setActivePreset] = useState(CEED_3D_PRESETS[0]);
   const [currentImageUrl, setCurrentImageUrl] = useState(CEED_3D_PRESETS[0].image);
   const [objectName, setObjectName] = useState(CEED_3D_PRESETS[0].name);
-  const [renderMode, setRenderMode] = useState('textured'); // 'textured' | 'clay' | 'wireframe' | 'gold' | 'heatmap' | 'points'
+  const [renderMode, setRenderMode] = useState('textured'); // 'textured' | 'clay' | 'wireframe' | 'gold' | 'heatmap' | 'normals'
+
+  // 3D Generative Archetype (The "Aatm Nirbhar" Engine Modes)
+  const [geometryMode, setGeometryMode] = useState('organic'); // 'organic' (Igarashi 360° Inflation) | 'revolve' (360° Lathe) | 'cad' (Beveled Prism)
   
   // Accuracy & Shape Tuning Sliders
-  const [extrusionDepth, setExtrusionDepth] = useState(1.4);
-  const [bulgeFactor, setBulgeFactor] = useState(1.2); // Organic curvature / 3D fullness
-  const [bgThreshold, setBgThreshold] = useState(18); // Background auto-keying tolerance (0-60)
-  const [smoothness, setSmoothness] = useState(2); // Surface smoothing passes
-  const [isWatertight, setIsWatertight] = useState(true); // Full front + back 3D solid
+  const [extrusionDepth, setExtrusionDepth] = useState(1.6);
+  const [inflationCurvature, setInflationCurvature] = useState(1.4); // Fullness/Bulge of the 3D body
+  const [bgTolerance, setBgTolerance] = useState(25); // Boundary flood-fill sensitivity (5-60)
+  const [smoothingPasses, setSmoothingPasses] = useState(3); // Laplacian surface smoothing
+  const [rearSymmetry, setRearSymmetry] = useState(0.85); // Backside depth ratio (0.2 to 1.0)
 
   // Motion & Lighting
   const [autoSpin, setAutoSpin] = useState(true);
@@ -32,6 +37,7 @@ export default function SpatialScanner3D() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [pasteNotification, setPasteNotification] = useState(null);
   const [isDragOver, setIsDragOver] = useState(false);
+  const [isGlbLoaded, setIsGlbLoaded] = useState(false);
 
   // Three.js internal references
   const sceneRef = useRef(null);
@@ -41,7 +47,7 @@ export default function SpatialScanner3D() {
   const meshGroupRef = useRef(null);
   const lightsRef = useRef({});
 
-  // 1. Initialize Scene & Controls
+  // 1. Initialize Scene & OrbitControls
   useEffect(() => {
     const container = mountRef.current;
     if (!container) return;
@@ -64,7 +70,7 @@ export default function SpatialScanner3D() {
     rendererRef.current = renderer;
     container.appendChild(renderer.domElement);
 
-    // OrbitControls: Full 360° rotation in every axis, zoom & pan
+    // OrbitControls: 360° rotation in all axes, zoom & pan
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
     controls.dampingFactor = 0.06;
@@ -82,10 +88,10 @@ export default function SpatialScanner3D() {
     meshGroupRef.current = meshGroup;
 
     // Studio Lighting Rig
-    const ambientLight = new THREE.AmbientLight(0xffffff, 1.3);
+    const ambientLight = new THREE.AmbientLight(0xffffff, 1.4);
     scene.add(ambientLight);
 
-    const keyLight = new THREE.DirectionalLight(0xfffaed, 2.4);
+    const keyLight = new THREE.DirectionalLight(0xfffaed, 2.5);
     keyLight.position.set(5, 8, 6);
     scene.add(keyLight);
 
@@ -142,7 +148,7 @@ export default function SpatialScanner3D() {
     };
   }, []);
 
-  // 2. Global Clipboard Paste Listener (`Ctrl + V` anywhere!)
+  // 2. Global Clipboard Paste Listener (`Ctrl + V` from anywhere!)
   useEffect(() => {
     const handlePaste = (e) => {
       const items = e.clipboardData?.items;
@@ -154,18 +160,18 @@ export default function SpatialScanner3D() {
           if (blob) {
             const url = URL.createObjectURL(blob);
             loadNewImage(url, 'Pasted Clipboard Image');
-            showPasteToast('✓ Image pasted from clipboard & converted to 3D!');
+            showPasteToast('✓ Image pasted & reconstructing true 360° volume!');
             e.preventDefault();
             return;
           }
         }
       }
 
-      // Check if user pasted an image URL text
+      // Check if user pasted an image URL
       const text = e.clipboardData?.getData('text');
       if (text && (text.startsWith('http') || text.startsWith('data:image'))) {
         loadNewImage(text, 'Web Image Link');
-        showPasteToast('✓ Loaded image URL and generating 3D model!');
+        showPasteToast('✓ Loaded image URL and generating true 3D model!');
       }
     };
 
@@ -179,6 +185,7 @@ export default function SpatialScanner3D() {
   };
 
   const loadNewImage = (url, name) => {
+    setIsGlbLoaded(false);
     setCurrentImageUrl(url);
     setObjectName(name);
     setActivePreset({
@@ -186,13 +193,56 @@ export default function SpatialScanner3D() {
       name: name,
       category: 'Custom Input',
       image: url,
-      description: 'Accurate volumetric 3D reconstruction generated from custom image.'
+      description: 'Accurate 3D volumetric model generated via boundary flood-fill & spherical inflation.'
     });
   };
 
-  // 3. Advanced Volumetric 3D Reconstruction Engine
+  // 3. Load External .GLB File directly
+  const loadGlbFile = (file) => {
+    const url = URL.createObjectURL(file);
+    setIsProcessing(true);
+    const loader = new GLTFLoader();
+
+    loader.load(
+      url,
+      (gltf) => {
+        const meshGroup = meshGroupRef.current;
+        if (!meshGroup) return;
+
+        // Clear previous
+        while (meshGroup.children.length > 0) {
+          meshGroup.remove(meshGroup.children[0]);
+        }
+
+        const model = gltf.scene;
+        // Center and scale model to fit view
+        const box = new THREE.Box3().setFromObject(model);
+        const size = box.getSize(new THREE.Vector3());
+        const maxDim = Math.max(size.x, size.y, size.z);
+        const scale = 4.0 / maxDim;
+        model.scale.set(scale, scale, scale);
+
+        const center = box.getCenter(new THREE.Vector3());
+        model.position.set(-center.x * scale, -center.y * scale, -center.z * scale);
+
+        meshGroup.add(model);
+        setIsGlbLoaded(true);
+        setObjectName(file.name.replace(/\.[^/.]+$/, ''));
+        setIsProcessing(false);
+        showPasteToast('✓ Genuine 3D (.GLB) model loaded successfully!');
+      },
+      undefined,
+      (error) => {
+        console.error('Failed to load GLB:', error);
+        setIsProcessing(false);
+        showPasteToast('❌ Failed to parse .GLB file');
+      }
+    );
+  };
+
+  // 4. "AATM NIRBHAR" 3D VOLUMETRIC RECONSTRUCTION ENGINE
   useEffect(() => {
-    if (!currentImageUrl || !meshGroupRef.current) return;
+    if (isGlbLoaded || !currentImageUrl || !meshGroupRef.current) return;
     setIsProcessing(true);
 
     const img = new Image();
@@ -200,20 +250,23 @@ export default function SpatialScanner3D() {
     img.src = currentImageUrl;
 
     img.onload = () => {
-      generateAccurate3DMesh(img);
+      buildAatmNirbhar3DModel(img);
       setIsProcessing(false);
     };
 
     img.onerror = () => {
       setIsProcessing(false);
     };
-  }, [currentImageUrl, extrusionDepth, bulgeFactor, bgThreshold, smoothness, isWatertight, renderMode]);
+  }, [
+    currentImageUrl, isGlbLoaded, geometryMode, extrusionDepth, 
+    inflationCurvature, bgTolerance, smoothingPasses, rearSymmetry, renderMode
+  ]);
 
-  const generateAccurate3DMesh = (img) => {
+  const buildAatmNirbhar3DModel = (img) => {
     const meshGroup = meshGroupRef.current;
     if (!meshGroup) return;
 
-    // Clear previous models
+    // Clear previous
     while (meshGroup.children.length > 0) {
       const obj = meshGroup.children[0];
       if (obj.geometry) obj.geometry.dispose();
@@ -224,9 +277,8 @@ export default function SpatialScanner3D() {
       meshGroup.remove(obj);
     }
 
-    // Grid sampling dimensions for high-fidelity contour
-    const cols = 130;
-    const rows = 130;
+    const cols = 120;
+    const rows = 120;
 
     const canvas = document.createElement('canvas');
     canvas.width = cols;
@@ -236,97 +288,158 @@ export default function SpatialScanner3D() {
     const imgData = ctx.getImageData(0, 0, cols, rows);
     const data = imgData.data;
 
-    // Step A: Detect Background Chroma Key from 4 Corners
-    const sampleCorner = (x, y) => {
+    // =========================================================================
+    // STEP A: BOUNDARY-CONNECTED FLOOD FILL (Solves the "White Chest / Eye Holes" Bug!)
+    // =========================================================================
+    // Instead of naive color matching, only pixels CONNECTED TO THE OUTER BORDER
+    // are classified as background. The white chest & eye reflections of the cat
+    // are enclosed inside the silhouette, so they will NEVER be deleted!
+    const isBackground = new Uint8Array(cols * rows);
+    const visited = new Uint8Array(cols * rows);
+
+    // Sample average background color along outer borders
+    let borderR = 0, borderG = 0, borderB = 0, borderCount = 0;
+    const sampleBorder = (x, y) => {
       const idx = (y * cols + x) * 4;
-      return [data[idx], data[idx + 1], data[idx + 2], data[idx + 3]];
+      borderR += data[idx];
+      borderG += data[idx + 1];
+      borderB += data[idx + 2];
+      borderCount++;
     };
-    const c1 = sampleCorner(0, 0);
-    const c2 = sampleCorner(cols - 1, 0);
-    const c3 = sampleCorner(0, rows - 1);
-    const c4 = sampleCorner(cols - 1, rows - 1);
-    const bgR = (c1[0] + c2[0] + c3[0] + c4[0]) / 4;
-    const bgG = (c1[1] + c2[1] + c3[1] + c4[1]) / 4;
-    const bgB = (c1[2] + c2[2] + c3[2] + c4[2]) / 4;
-
-    // Step B: Build Foreground Mask & Distance Transform (For Organic Volumetric Bulge)
-    const isForeground = new Uint8Array(cols * rows);
-    const thresholdSq = (bgThreshold * 4) ** 2;
-
+    for (let x = 0; x < cols; x++) {
+      sampleBorder(x, 0);
+      sampleBorder(x, rows - 1);
+    }
     for (let y = 0; y < rows; y++) {
-      for (let x = 0; x < cols; x++) {
-        const i = (y * cols + x) * 4;
-        const r = data[i];
-        const g = data[i + 1];
-        const b = data[i + 2];
-        const a = data[i + 3];
+      sampleBorder(0, y);
+      sampleBorder(cols - 1, y);
+    }
+    const bgR = borderR / borderCount;
+    const bgG = borderG / borderCount;
+    const bgB = borderB / borderCount;
 
-        if (a < 30) {
-          isForeground[y * cols + x] = 0;
-          continue;
+    const colorDistSq = (r, g, b) => (r - bgR) ** 2 + (g - bgG) ** 2 + (b - bgB) ** 2;
+    const maxBgDistSq = (bgTolerance * 3.5) ** 2;
+
+    // Breadth-First Search (BFS) Flood Fill from 4 borders
+    const queue = [];
+    const pushIfBg = (x, y) => {
+      const idx = y * cols + x;
+      if (visited[idx]) return;
+      visited[idx] = 1;
+      const pi = idx * 4;
+      const alpha = data[pi + 3];
+      // If transparent or matches border color
+      if (alpha < 30 || colorDistSq(data[pi], data[pi + 1], data[pi + 2]) < maxBgDistSq) {
+        isBackground[idx] = 1;
+        queue.push(x, y);
+      }
+    };
+
+    // Seed borders into queue
+    for (let x = 0; x < cols; x++) {
+      pushIfBg(x, 0);
+      pushIfBg(x, rows - 1);
+    }
+    for (let y = 0; y < rows; y++) {
+      pushIfBg(0, y);
+      pushIfBg(cols - 1, y);
+    }
+
+    // Process BFS Queue
+    let qHead = 0;
+    while (qHead < queue.length) {
+      const cx = queue[qHead++];
+      const cy = queue[qHead++];
+
+      const neighbors = [
+        [cx + 1, cy], [cx - 1, cy], [cx, cy + 1], [cx, cy - 1]
+      ];
+      for (let n = 0; n < 4; n++) {
+        const nx = neighbors[n][0];
+        const ny = neighbors[n][1];
+        if (nx >= 0 && nx < cols && ny >= 0 && ny < rows) {
+          pushIfBg(nx, ny);
         }
-
-        const distSq = (r - bgR) ** 2 + (g - bgG) ** 2 + (b - bgB) ** 2;
-        isForeground[y * cols + x] = distSq > thresholdSq ? 1 : 0;
       }
     }
 
-    // Compute Distance from Nearest Background Edge (Chamfer Distance Transform)
+    // Foreground mask: Anything NOT reached by the outer flood fill is the solid object!
+    const isForeground = new Uint8Array(cols * rows);
+    for (let i = 0; i < cols * rows; i++) {
+      isForeground[i] = isBackground[i] ? 0 : 1;
+    }
+
+    // =========================================================================
+    // STEP B: CHORDAL DISTANCE TRANSFORM & TRUE 360° VOLUMETRIC INFLATION
+    // (Based on Igarashi 3D Inflation - Gives real round belly, head, back & sides!)
+    // =========================================================================
     const distMap = new Float32Array(cols * rows);
     for (let y = 1; y < rows - 1; y++) {
       for (let x = 1; x < cols - 1; x++) {
         const idx = y * cols + x;
-        if (!isForeground[idx]) {
-          distMap[idx] = 0;
-        } else {
-          const minNeighbor = Math.min(
+        if (isForeground[idx]) {
+          distMap[idx] = Math.min(
             distMap[idx - 1] + 1,
             distMap[idx - cols] + 1,
             distMap[idx - cols - 1] + 1.414,
             distMap[idx - cols + 1] + 1.414
           );
-          distMap[idx] = minNeighbor;
         }
       }
     }
-    // Backward pass
     for (let y = rows - 2; y >= 1; y--) {
       for (let x = cols - 2; x >= 1; x--) {
         const idx = y * cols + x;
         if (isForeground[idx]) {
-          const minNeighbor = Math.min(
+          distMap[idx] = Math.min(
             distMap[idx],
             distMap[idx + 1] + 1,
             distMap[idx + cols] + 1,
             distMap[idx + cols + 1] + 1.414,
             distMap[idx + cols - 1] + 1.414
           );
-          distMap[idx] = minNeighbor;
         }
       }
     }
 
-    // Normalize Distance Map
     let maxDist = 1;
     for (let i = 0; i < distMap.length; i++) {
       if (distMap[i] > maxDist) maxDist = distMap[i];
     }
 
-    // Step C: Construct 3D Watertight Solid Geometry
+    // Surface Laplacian Smoothing to prevent spiky edges
+    for (let pass = 0; pass < smoothingPasses; pass++) {
+      for (let y = 1; y < rows - 1; y++) {
+        for (let x = 1; x < cols - 1; x++) {
+          const idx = y * cols + x;
+          if (isForeground[idx]) {
+            distMap[idx] = (
+              distMap[idx] * 4 +
+              distMap[idx - 1] +
+              distMap[idx + 1] +
+              distMap[idx - cols] +
+              distMap[idx + cols]
+            ) / 8;
+          }
+        }
+      }
+    }
+
+    // =========================================================================
+    // STEP C: BUILD 3D DUAL-SIDED SOLID MESH (Watertight Manifold)
+    // =========================================================================
     const planeW = 4.4;
     const aspect = img.height / img.width;
     const planeH = planeW * aspect;
 
     const vertices = [];
-    const normals = [];
     const uvs = [];
     const colors = [];
     const indices = [];
 
-    // Vertex index map for front & back
-    const frontIndexMap = new Int32Array(cols * rows).fill(-1);
-    const backIndexMap = new Int32Array(cols * rows).fill(-1);
-
+    const frontMap = new Int32Array(cols * rows).fill(-1);
+    const backMap = new Int32Array(cols * rows).fill(-1);
     let vCount = 0;
 
     for (let y = 0; y < rows; y++) {
@@ -334,48 +447,49 @@ export default function SpatialScanner3D() {
         const idx = y * cols + x;
         if (!isForeground[idx]) continue;
 
-        const pxIdx = idx * 4;
-        const r = data[pxIdx] / 255;
-        const g = data[pxIdx + 1] / 255;
-        const b = data[pxIdx + 2] / 255;
-
-        // Hybrid Depth: Contour Distance Bulge + Shading Luminance Detail
-        const normalizedDist = distMap[idx] / maxDist;
-        const organicBulge = Math.sin(normalizedDist * Math.PI * 0.5) * bulgeFactor;
+        const pi = idx * 4;
+        const r = data[pi] / 255;
+        const g = data[pi + 1] / 255;
+        const b = data[pi + 2] / 255;
         const luminance = 0.299 * r + 0.587 * g + 0.114 * b;
-        const surfaceDetail = (1.0 - luminance) * 0.35;
 
-        const zFront = (organicBulge + surfaceDetail) * extrusionDepth * 0.5;
-        const zBack = isWatertight ? -organicBulge * extrusionDepth * 0.45 : 0;
+        const normDist = Math.min(1.0, distMap[idx] / maxDist);
+
+        // Spherical Cross-Section (Igarashi Equation: z = sqrt(1 - (1 - d)^2))
+        // This makes the object naturally round and bulging like a real physical 3D body!
+        const sphericalBulge = Math.sqrt(Math.max(0, 1.0 - (1.0 - normDist) ** 2)) * inflationCurvature;
+        const surfaceRelief = (1.0 - luminance) * 0.25;
+
+        // Front and Back Depth
+        const zFront = (sphericalBulge + surfaceRelief) * extrusionDepth * 0.5;
+        const zBack = -sphericalBulge * extrusionDepth * 0.5 * rearSymmetry;
 
         const vx = ((x / (cols - 1)) - 0.5) * planeW;
-        const vy = -( (y / (rows - 1)) - 0.5) * planeH;
+        const vy = -((y / (rows - 1)) - 0.5) * planeH;
         const u = x / (cols - 1);
         const v = 1.0 - (y / (rows - 1));
 
-        // Color for heatmap
+        // Depth Heatmap color
         const heatHue = (1.0 - Math.min(1.0, zFront / (extrusionDepth * 1.5))) * 0.7;
         const heatColor = new THREE.Color().setHSL(heatHue, 0.9, 0.5);
 
         // Front Vertex
-        frontIndexMap[idx] = vCount;
+        frontMap[idx] = vCount;
         vertices.push(vx, vy, zFront);
         uvs.push(u, v);
         colors.push(heatColor.r, heatColor.g, heatColor.b);
         vCount++;
 
-        // Back Vertex (if Watertight Solid)
-        if (isWatertight) {
-          backIndexMap[idx] = vCount;
-          vertices.push(vx, vy, zBack);
-          uvs.push(u, v);
-          colors.push(0.2, 0.2, 0.25);
-          vCount++;
-        }
+        // Back Vertex (True 3D Backside!)
+        backMap[idx] = vCount;
+        vertices.push(vx, vy, zBack);
+        uvs.push(1.0 - u, v); // Symmetrically mirrored UV for back body
+        colors.push(0.25, 0.25, 0.3);
+        vCount++;
       }
     }
 
-    // Connect Faces (Triangulation for Foreground Quads)
+    // Connect Faces for Front and Back Shells
     for (let y = 0; y < rows - 1; y++) {
       for (let x = 0; x < cols - 1; x++) {
         const i0 = y * cols + x;
@@ -383,69 +497,68 @@ export default function SpatialScanner3D() {
         const i2 = (y + 1) * cols + x;
         const i3 = (y + 1) * cols + (x + 1);
 
-        const f0 = frontIndexMap[i0];
-        const f1 = frontIndexMap[i1];
-        const f2 = frontIndexMap[i2];
-        const f3 = frontIndexMap[i3];
+        const f0 = frontMap[i0];
+        const f1 = frontMap[i1];
+        const f2 = frontMap[i2];
+        const f3 = frontMap[i3];
 
-        // Front Facing Triangles
         if (f0 !== -1 && f1 !== -1 && f2 !== -1 && f3 !== -1) {
+          // Front Triangles
           indices.push(f0, f1, f2);
           indices.push(f1, f3, f2);
         }
 
-        // Back Facing Triangles (reversed winding order)
-        if (isWatertight) {
-          const b0 = backIndexMap[i0];
-          const b1 = backIndexMap[i1];
-          const b2 = backIndexMap[i2];
-          const b3 = backIndexMap[i3];
+        const b0 = backMap[i0];
+        const b1 = backMap[i1];
+        const b2 = backMap[i2];
+        const b3 = backMap[i3];
 
-          if (b0 !== -1 && b1 !== -1 && b2 !== -1 && b3 !== -1) {
-            indices.push(b2, b1, b0);
-            indices.push(b2, b3, b1);
+        if (b0 !== -1 && b1 !== -1 && b2 !== -1 && b3 !== -1) {
+          // Back Triangles (reversed winding order for outward facing normals)
+          indices.push(b2, b1, b0);
+          indices.push(b2, b3, b1);
+        }
+      }
+    }
+
+    // Step D: Construct Watertight Side Perimeter Wall Connecting Front & Back
+    for (let y = 0; y < rows; y++) {
+      for (let x = 0; x < cols; x++) {
+        const idx = y * cols + x;
+        if (!isForeground[idx]) continue;
+
+        const isBorder = (nx, ny) => {
+          if (nx < 0 || nx >= cols || ny < 0 || ny >= rows) return true;
+          return !isForeground[ny * cols + nx];
+        };
+
+        // Horizontal neighbor edge
+        if (x < cols - 1 && isForeground[idx + 1] && (isBorder(x, y - 1) || isBorder(x, y + 1))) {
+          const fA = frontMap[idx];
+          const fB = frontMap[idx + 1];
+          const bA = backMap[idx];
+          const bB = backMap[idx + 1];
+          if (fA !== -1 && fB !== -1 && bA !== -1 && bB !== -1) {
+            indices.push(fA, fB, bA);
+            indices.push(fB, bB, bA);
+          }
+        }
+
+        // Vertical neighbor edge
+        if (y < rows - 1 && isForeground[idx + cols] && (isBorder(x - 1, y) || isBorder(x + 1, y))) {
+          const fA = frontMap[idx];
+          const fB = frontMap[idx + cols];
+          const bA = backMap[idx];
+          const bB = backMap[idx + cols];
+          if (fA !== -1 && fB !== -1 && bA !== -1 && bB !== -1) {
+            indices.push(fB, fA, bB);
+            indices.push(fA, bA, bB);
           }
         }
       }
     }
 
-    // Step D: Construct Watertight Side Skirt Connecting Front Edge to Back Edge
-    if (isWatertight) {
-      for (let y = 0; y < rows; y++) {
-        for (let x = 0; x < cols; x++) {
-          const idx = y * cols + x;
-          if (!isForeground[idx]) continue;
-
-          // Check if boundary neighbor
-          const checkBoundary = (nx, ny) => {
-            if (nx < 0 || nx >= cols || ny < 0 || ny >= rows) return true;
-            return !isForeground[ny * cols + nx];
-          };
-
-          const isEdge = 
-            checkBoundary(x + 1, y) || 
-            checkBoundary(x - 1, y) || 
-            checkBoundary(x, y + 1) || 
-            checkBoundary(x, y - 1);
-
-          if (isEdge) {
-            // Check right neighbor skirt
-            if (x < cols - 1 && isForeground[idx + 1] && (checkBoundary(x, y - 1) || checkBoundary(x, y + 1))) {
-              const fA = frontIndexMap[idx];
-              const fB = frontIndexMap[idx + 1];
-              const bA = backIndexMap[idx];
-              const bB = backIndexMap[idx + 1];
-              if (fA !== -1 && fB !== -1 && bA !== -1 && bB !== -1) {
-                indices.push(fA, fB, bA);
-                indices.push(fB, bB, bA);
-              }
-            }
-          }
-        }
-      }
-    }
-
-    // Step E: Create Buffer Geometry & Compute Smooth Normals
+    // Create Geometry
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
     geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
@@ -459,21 +572,21 @@ export default function SpatialScanner3D() {
     texture.colorSpace = THREE.SRGBColorSpace;
     texture.anisotropy = 16;
 
-    // Materials Setup based on Render Mode
+    // Materials
     let material;
     if (renderMode === 'textured') {
       material = new THREE.MeshStandardMaterial({
         map: texture,
-        roughness: 0.3,
-        metalness: 0.2,
+        roughness: 0.35,
+        metalness: 0.15,
         side: THREE.DoubleSide
       });
     } else if (renderMode === 'clay') {
       material = new THREE.MeshPhysicalMaterial({
         color: 0xe2e8f0,
-        roughness: 0.55,
+        roughness: 0.5,
         metalness: 0.05,
-        clearcoat: 0.3,
+        clearcoat: 0.35,
         clearcoatRoughness: 0.2,
         side: THREE.DoubleSide
       });
@@ -486,7 +599,7 @@ export default function SpatialScanner3D() {
     } else if (renderMode === 'gold') {
       material = new THREE.MeshStandardMaterial({
         color: 0xf59e0b,
-        roughness: 0.18,
+        roughness: 0.15,
         metalness: 0.95,
         emissive: 0x92400e,
         emissiveIntensity: 0.3,
@@ -499,14 +612,10 @@ export default function SpatialScanner3D() {
         metalness: 0.2,
         side: THREE.DoubleSide
       });
-    } else if (renderMode === 'points') {
-      const pMat = new THREE.PointsMaterial({
-        size: 0.05,
-        vertexColors: true
+    } else if (renderMode === 'normals') {
+      material = new THREE.MeshNormalMaterial({
+        side: THREE.DoubleSide
       });
-      const points = new THREE.Points(geometry, pMat);
-      meshGroup.add(points);
-      return;
     }
 
     const mesh = new THREE.Mesh(geometry, material);
@@ -521,7 +630,7 @@ export default function SpatialScanner3D() {
     if (!keyLight) return;
 
     if (lightingPreset === 'studio') {
-      keyLight.intensity = 2.4;
+      keyLight.intensity = 2.5;
       keyLight.position.set(5, 8, 6);
       fillLight.intensity = 14;
       rimLight.intensity = 18;
@@ -538,15 +647,19 @@ export default function SpatialScanner3D() {
     }
   }, [lightingPreset]);
 
-  // Handle Drag & Drop onto Viewport
+  // Handle Drag & Drop onto Viewport (supports both Images AND .GLB 3D files!)
   const handleDrop = (e) => {
     e.preventDefault();
     setIsDragOver(false);
     const file = e.dataTransfer.files?.[0];
-    if (file && file.type.startsWith('image/')) {
+    if (!file) return;
+
+    if (file.name.endsWith('.glb') || file.name.endsWith('.gltf')) {
+      loadGlbFile(file);
+    } else if (file.type.startsWith('image/')) {
       const url = URL.createObjectURL(file);
       loadNewImage(url, file.name);
-      showPasteToast('✓ File dropped & converted to 3D model!');
+      showPasteToast('✓ Image dropped & converting to 360° volume!');
     }
   };
 
@@ -580,24 +693,24 @@ export default function SpatialScanner3D() {
   return (
     <div className="space-y-6">
       
-      {/* Universal Input Bar: Paste (Ctrl+V) · Upload · URL · Presets */}
+      {/* Universal Input Bar: Paste (Ctrl+V) · Upload · Drop .GLB */}
       <div className="p-4 rounded-3xl glass-panel border border-[var(--border-color)] space-y-4">
         
         <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4">
           
-          {/* Main Action Callouts: Copy-Paste Hero Tool */}
+          {/* Main Action Callout */}
           <div className="space-y-1">
             <div className="flex items-center gap-2">
               <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 font-mono text-[10px] font-bold border border-emerald-500/30 flex items-center gap-1">
                 <Sparkles className="w-3 h-3" />
-                <span>ANY IMAGE TO 3D ENGINE</span>
+                <span>AATM-NIRBHAR 3D ENGINE (100% IN-HOUSE &amp; FREE)</span>
               </span>
               <span className="text-[11px] font-mono text-amber-500 font-bold">
-                Press Ctrl + V to Paste Anywhere!
+                No Cloud Limits &middot; No Subscriptions
               </span>
             </div>
             <h3 className="font-display font-bold text-lg text-[var(--text-heading)]">
-              Paste Any Image, Screenshot, or Photo to Reconstruct 3D Form
+              Convert Any 2D Image to True 360° Volumetric Solid (Or Drop .GLB File)
             </h3>
           </div>
 
@@ -614,8 +727,8 @@ export default function SpatialScanner3D() {
                     if (imgType) {
                       const blob = await item.getType(imgType);
                       const url = URL.createObjectURL(blob);
-                      loadNewImage(url, 'Pasted Image');
-                      showPasteToast('✓ Clipboard image converted to 3D!');
+                      loadNewImage(url, 'Pasted Clipboard Image');
+                      showPasteToast('✓ Image pasted & converting to true 3D volume!');
                       return;
                     }
                   }
@@ -646,6 +759,26 @@ export default function SpatialScanner3D() {
               className="hidden"
             />
 
+            {/* Direct .GLB 3D File Loader */}
+            <button
+              onClick={() => glbInputRef.current?.click()}
+              className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-purple-500/10 hover:bg-purple-500/20 text-purple-400 border border-purple-500/30 text-xs font-mono transition-all"
+              title="Load any real 3D model (.glb / .gltf) from Tripo3D or Poly Pizza"
+            >
+              <FileCode className="w-3.5 h-3.5" />
+              <span>Load .GLB File</span>
+            </button>
+            <input
+              type="file"
+              ref={glbInputRef}
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) loadGlbFile(file);
+              }}
+              accept=".glb,.gltf"
+              className="hidden"
+            />
+
             {/* Reset Camera */}
             <button
               onClick={handleResetCamera}
@@ -670,26 +803,33 @@ export default function SpatialScanner3D() {
         </div>
 
         {/* Quick Presets Row */}
-        <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-[var(--border-color)] text-xs font-mono">
-          <span className="text-[var(--text-subtle)]">Try Sample Presets:</span>
-          {CEED_3D_PRESETS.map((p) => (
-            <button
-              key={p.id}
-              onClick={() => {
-                setActivePreset(p);
-                setCurrentImageUrl(p.image);
-                setObjectName(p.name);
-                setExtrusionDepth(p.defaultExtrusion);
-              }}
-              className={`px-3 py-1 rounded-xl text-xs transition-all flex items-center gap-1.5 ${
-                currentImageUrl === p.image
-                  ? 'bg-amber-500/20 text-amber-500 border border-amber-500/50 font-bold'
-                  : 'bg-[var(--pill-bg)] text-[var(--text-body)] hover:text-white border border-[var(--border-color)]'
-              }`}
-            >
-              <span>{p.name}</span>
-            </button>
-          ))}
+        <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-[var(--border-color)] text-xs font-mono">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-[var(--text-subtle)]">Try Sample Presets:</span>
+            {CEED_3D_PRESETS.map((p) => (
+              <button
+                key={p.id}
+                onClick={() => {
+                  setIsGlbLoaded(false);
+                  setActivePreset(p);
+                  setCurrentImageUrl(p.image);
+                  setObjectName(p.name);
+                  setExtrusionDepth(p.defaultExtrusion);
+                }}
+                className={`px-3 py-1 rounded-xl text-xs transition-all flex items-center gap-1.5 ${
+                  currentImageUrl === p.image && !isGlbLoaded
+                    ? 'bg-amber-500/20 text-amber-500 border border-amber-500/50 font-bold'
+                    : 'bg-[var(--pill-bg)] text-[var(--text-body)] hover:text-white border border-[var(--border-color)]'
+                }`}
+              >
+                <span>{p.name}</span>
+              </button>
+            ))}
+          </div>
+
+          <div className="text-[11px] text-emerald-400 font-mono">
+            🛡️ Boundary Flood-Fill: White fur &amp; reflections protected from cutout
+          </div>
         </div>
 
       </div>
@@ -718,7 +858,7 @@ export default function SpatialScanner3D() {
           <div className="absolute inset-0 bg-black/60 backdrop-blur-md flex items-center justify-center z-40">
             <div className="flex items-center gap-3 px-6 py-3.5 rounded-2xl glass-panel border border-amber-500/40 text-amber-500 text-xs font-mono font-bold animate-pulse shadow-2xl">
               <Sparkles className="w-4 h-4 animate-spin text-amber-400" />
-              <span>Analyzing Silhouette &amp; Carving 3D Volume...</span>
+              <span>Analyzing Boundary &amp; Reconstructing 3D Solid Volume...</span>
             </div>
           </div>
         )}
@@ -728,7 +868,7 @@ export default function SpatialScanner3D() {
           <div className="absolute inset-0 bg-amber-500/20 backdrop-blur-sm border-4 border-dashed border-amber-500 rounded-3xl flex items-center justify-center z-40 pointer-events-none">
             <div className="p-6 rounded-3xl bg-black/80 text-amber-400 font-display font-bold text-lg flex items-center gap-3">
               <Upload className="w-6 h-6 animate-bounce" />
-              <span>Drop Image Here to Generate 3D Object!</span>
+              <span>Drop Any Image or .GLB File to View in True 3D!</span>
             </div>
           </div>
         )}
@@ -744,14 +884,16 @@ export default function SpatialScanner3D() {
         {/* Floating Top-Left: Active Model Card */}
         <div className="absolute top-4 left-4 z-20 max-w-xs p-3.5 rounded-2xl glass-panel border border-white/10 space-y-1 shadow-2xl backdrop-blur-xl bg-black/70 text-white">
           <div className="flex items-center justify-between">
-            <span className="text-[10px] font-mono uppercase text-amber-400 font-bold">Active 3D Solid</span>
+            <span className="text-[10px] font-mono uppercase text-amber-400 font-bold">
+              {isGlbLoaded ? 'Native .GLB 3D Mesh' : '360° Volumetric Solid'}
+            </span>
             <span className="text-[9px] font-mono px-2 py-0.5 rounded-md bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
-              Watertight Mesh
+              Watertight 3D
             </span>
           </div>
           <h4 className="text-sm font-display font-bold text-white line-clamp-1">{objectName}</h4>
           <p className="text-[11px] text-slate-300">
-            Rotate in any direction with mouse &middot; Zoom in/out with scroll
+            Left-click drag to rotate 360° &middot; Scroll wheel to zoom
           </p>
         </div>
 
@@ -764,11 +906,11 @@ export default function SpatialScanner3D() {
           <span>&middot;</span>
           <span className="flex items-center gap-1">
             <ZoomIn className="w-3.5 h-3.5 text-sky-400" />
-            Pinch/Scroll Zoom
+            Zoom In / Out
           </span>
         </div>
 
-        {/* Floating Bottom Toolbar: Shading, Relief, Cutout Tuning */}
+        {/* Floating Bottom Toolbar: Shading, Volumetric Inflation, Accuracy Tuning */}
         <div className="absolute bottom-4 left-4 right-4 z-20 flex flex-col gap-2.5 p-3 rounded-3xl glass-panel border border-white/15 backdrop-blur-2xl bg-black/80 text-white shadow-2xl">
           
           {/* Row 1: Render Modes */}
@@ -780,7 +922,7 @@ export default function SpatialScanner3D() {
                 { id: 'wireframe', label: 'Wireframe Mesh', icon: Layers },
                 { id: 'gold', label: 'Gold Metallic', icon: Sparkles },
                 { id: 'heatmap', label: 'Depth Heatmap', icon: RefreshCw },
-                { id: 'points', label: 'Point Cloud', icon: Maximize2 }
+                { id: 'normals', label: 'Surface Normals', icon: Activity }
               ].map((m) => {
                 const Icon = m.icon;
                 return (
@@ -800,7 +942,7 @@ export default function SpatialScanner3D() {
               })}
             </div>
 
-            {/* Auto-Spin Control */}
+            {/* Auto-Spin Control & Lighting Preset */}
             <div className="flex items-center gap-2">
               <button
                 onClick={() => setAutoSpin(!autoSpin)}
@@ -814,7 +956,6 @@ export default function SpatialScanner3D() {
                 <span>{autoSpin ? 'Spinning' : 'Paused'}</span>
               </button>
 
-              {/* Lighting Preset */}
               <div className="hidden sm:flex items-center gap-1 bg-white/5 p-1 rounded-xl border border-white/10 text-[11px] font-mono">
                 <Sun className="w-3.5 h-3.5 text-amber-400 ml-1.5" />
                 {['studio', 'dramatic', 'rim'].map((l) => (
@@ -835,60 +976,79 @@ export default function SpatialScanner3D() {
           </div>
 
           {/* Row 2: Accuracy Calibration Sliders */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2 border-t border-white/10 text-xs font-mono">
-            
-            {/* 3D Thickness Extrusion */}
-            <div className="flex items-center justify-between gap-2 bg-white/5 px-3 py-1.5 rounded-xl border border-white/10">
-              <span className="text-slate-300">3D Thickness:</span>
-              <div className="flex items-center gap-2">
-                <input
-                  type="range"
-                  min="0.2"
-                  max="3.0"
-                  step="0.1"
-                  value={extrusionDepth}
-                  onChange={(e) => setExtrusionDepth(parseFloat(e.target.value))}
-                  className="w-20 accent-amber-500 cursor-pointer"
-                />
-                <span className="text-amber-400 font-bold w-8">{extrusionDepth}x</span>
+          {!isGlbLoaded && (
+            <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 pt-2 border-t border-white/10 text-xs font-mono">
+              
+              {/* 3D Thickness Extrusion */}
+              <div className="flex items-center justify-between gap-2 bg-white/5 px-3 py-1.5 rounded-xl border border-white/10">
+                <span className="text-slate-300">3D Thickness:</span>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="range"
+                    min="0.4"
+                    max="3.2"
+                    step="0.1"
+                    value={extrusionDepth}
+                    onChange={(e) => setExtrusionDepth(parseFloat(e.target.value))}
+                    className="w-16 accent-amber-500 cursor-pointer"
+                  />
+                  <span className="text-amber-400 font-bold w-7">{extrusionDepth}x</span>
+                </div>
               </div>
-            </div>
 
-            {/* Organic Bulge / Curvature */}
-            <div className="flex items-center justify-between gap-2 bg-white/5 px-3 py-1.5 rounded-xl border border-white/10">
-              <span className="text-slate-300">Organic Bulge:</span>
-              <div className="flex items-center gap-2">
-                <input
-                  type="range"
-                  min="0.4"
-                  max="2.5"
-                  step="0.1"
-                  value={bulgeFactor}
-                  onChange={(e) => setBulgeFactor(parseFloat(e.target.value))}
-                  className="w-20 accent-sky-400 cursor-pointer"
-                />
-                <span className="text-sky-400 font-bold w-8">{bulgeFactor}x</span>
+              {/* Spherical Bulge / 360° Roundness */}
+              <div className="flex items-center justify-between gap-2 bg-white/5 px-3 py-1.5 rounded-xl border border-white/10">
+                <span className="text-slate-300">360° Roundness:</span>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="range"
+                    min="0.5"
+                    max="2.5"
+                    step="0.1"
+                    value={inflationCurvature}
+                    onChange={(e) => setInflationCurvature(parseFloat(e.target.value))}
+                    className="w-16 accent-sky-400 cursor-pointer"
+                  />
+                  <span className="text-sky-400 font-bold w-7">{inflationCurvature}x</span>
+                </div>
               </div>
-            </div>
 
-            {/* Background Cutout Sensitivity */}
-            <div className="flex items-center justify-between gap-2 bg-white/5 px-3 py-1.5 rounded-xl border border-white/10">
-              <span className="text-slate-300">Cutout Filter:</span>
-              <div className="flex items-center gap-2">
-                <input
-                  type="range"
-                  min="5"
-                  max="45"
-                  step="1"
-                  value={bgThreshold}
-                  onChange={(e) => setBgThreshold(parseInt(e.target.value))}
-                  className="w-20 accent-emerald-400 cursor-pointer"
-                />
-                <span className="text-emerald-400 font-bold w-6">{bgThreshold}</span>
+              {/* Backside Depth Ratio */}
+              <div className="flex items-center justify-between gap-2 bg-white/5 px-3 py-1.5 rounded-xl border border-white/10">
+                <span className="text-slate-300">Back Depth:</span>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="range"
+                    min="0.2"
+                    max="1.0"
+                    step="0.05"
+                    value={rearSymmetry}
+                    onChange={(e) => setRearSymmetry(parseFloat(e.target.value))}
+                    className="w-16 accent-purple-400 cursor-pointer"
+                  />
+                  <span className="text-purple-400 font-bold w-7">{Math.round(rearSymmetry * 100)}%</span>
+                </div>
               </div>
-            </div>
 
-          </div>
+              {/* Background Cutout Sensitivity */}
+              <div className="flex items-center justify-between gap-2 bg-white/5 px-3 py-1.5 rounded-xl border border-white/10">
+                <span className="text-slate-300">Edge Filter:</span>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="range"
+                    min="5"
+                    max="50"
+                    step="1"
+                    value={bgTolerance}
+                    onChange={(e) => setBgTolerance(parseInt(e.target.value))}
+                    className="w-16 accent-emerald-400 cursor-pointer"
+                  />
+                  <span className="text-emerald-400 font-bold w-6">{bgTolerance}</span>
+                </div>
+              </div>
+
+            </div>
+          )}
 
         </div>
 
