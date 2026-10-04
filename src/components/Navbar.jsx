@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Sparkles, Menu, X, ArrowUpRight, Lock, Layers, User, Send, Sun, Moon, Box } from 'lucide-react';
 import { useTheme } from '../context/ThemeContext';
 
-export default function Navbar({ onOpenAdmin, activeSection }) {
+export default function Navbar({ onOpenAdmin, onOpenCeedLab, activeSection }) {
   const [isScrolled, setIsScrolled] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const { theme, toggleTheme, isDark } = useTheme();
@@ -17,7 +17,7 @@ export default function Navbar({ onOpenAdmin, activeSection }) {
 
   const navLinks = [
     { name: 'Works', href: '#works', icon: Layers },
-    { name: 'CEED Lab', href: '#ceed-lab', icon: Box, badge: 'AI' },
+    { name: 'CEED Lab', href: '#ceed-lab', icon: Box, badge: 'AI Tools', isCeed: true },
     { name: 'About Craft', href: '#about', icon: User },
     { name: 'Contact', href: '#contact', icon: Send },
   ];
@@ -58,6 +58,12 @@ export default function Navbar({ onOpenAdmin, activeSection }) {
               <a
                 key={link.name}
                 href={link.href}
+                onClick={(e) => {
+                  if (link.isCeed && onOpenCeedLab) {
+                    e.preventDefault();
+                    onOpenCeedLab();
+                  }
+                }}
                 className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-xs font-medium text-[var(--text-body)] hover:text-[var(--text-heading)] hover:bg-black/5 dark:hover:bg-white/10 transition-all"
               >
                 <Icon className="w-3.5 h-3.5 text-amber-500" />
@@ -154,7 +160,13 @@ export default function Navbar({ onOpenAdmin, activeSection }) {
               <a
                 key={link.name}
                 href={link.href}
-                onClick={() => setMobileMenuOpen(false)}
+                onClick={(e) => {
+                  setMobileMenuOpen(false);
+                  if (link.isCeed && onOpenCeedLab) {
+                    e.preventDefault();
+                    onOpenCeedLab();
+                  }
+                }}
                 className="flex items-center gap-3 text-sm font-medium text-[var(--text-body)] hover:text-amber-500 py-2 border-b border-[var(--border-color)]"
               >
                 <Icon className="w-4 h-4 text-amber-500" />
